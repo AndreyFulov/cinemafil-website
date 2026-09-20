@@ -1,0 +1,37 @@
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Go
+go.sum
+
+# Environment files
+.env
+
+# Docker related (temp files)
+docker-compose.override.yml
+docker-compose.override.yaml
+*.log
+docker-*.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Compiled Go binaries
+core-api/*
+!core-api/*.go
+!core-api/cmd/*.go
+!core-api/internal/*.go
+!core-api/internal/models/*.go
+!core-api/internal/config/*.go
+
+# Test coverage
+coverage.txt
+*.out
