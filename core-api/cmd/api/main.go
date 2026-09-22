@@ -19,6 +19,7 @@ import (
 
 func main() {
 	cfg := config.LoadConfig()
+	log.Printf("OMDb API Key загружен: '%s'", cfg.OMDbAPIKey)
 
 	db := database.ConnectPostgres(cfg)
 	rdb := database.ConnectRedis(cfg)
@@ -28,7 +29,7 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 
 	// Инициализация сервисов
-	movieService := service.NewMovieService(movieRepo, rdb)
+	movieService := service.NewMovieService(movieRepo, rdb, cfg.OMDbAPIKey)
 	authService := service.NewAuthService(userRepo, cfg)
 
 	// Инициализация хэндлеров
@@ -60,6 +61,7 @@ func main() {
 	movies := api.Group("/movies")
 	movies.Get("/search", movieHandler.Search)
 	movies.Get("/:slug", movieHandler.GetBySlug)
+	movies.Get("/by-imdb/:imdb_id", movieHandler.GetByIMDbID)
 
 	// Защищенные маршруты (требуют валидный Access Token)
 	protected := api.Group("", middleware.Protected(cfg.JWTSecret))
