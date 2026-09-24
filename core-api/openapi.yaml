@@ -1,0 +1,485 @@
+openapi: 3.0.3
+info:
+  title: Cinephile Social Network API
+  description: |
+    REST API для цифрового киноклуба: каталог фильмов, автоматический парсинг метаданных и рейтингов (OMDb/IMDb, Кинопоиск, Letterboxd), композитная система рецензий (визуал, звук, сюжет, актёры, эмоции) и персональные рекомендации.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Локальный сервер разработки
+
+paths:
+  # ---------------------------------------------------------------------------
+  # АУТЕНТИФИКАЦИЯ И СЕССИИ
+  # ---------------------------------------------------------------------------
+  /auth/yandex:
+    get:
+      tags:
+        - Аутентификация
+      summary: Инициализация OAuth2 входа через Яндекс ID
+      description: Редиректит пользователя на форму подтверждения доступа Яндекс ID.
+      responses:
+        '307':
+          description: Временный редирект на сервис авторизации Яндекса
+
+  /auth/yandex/callback:
+    get:
+      tags:
+        - Аутентификация
+      summary: Обработка коллбэка Яндекс OAuth2
+      description: Принимает код авторизации от Яндекса, создает или находит пользователя, устанавливает HttpOnly cookie `refresh_token` и перенаправляет на фронтенд с `access_token`.
+      responses:
+        '307':
+          description: Редирект на фронтенд (`/auth/callback?token=...`)
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: refresh_token=abcde12345; Path=/; HttpOnly; SameSite=Lax
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/refresh:
+    post:
+      tags:
+        - Аутентификация
+      summary: Обновление пары токенов
+      description: Выпускает новый `access_token` на основе валидной `refresh_token` cookie.
+      parameters:
+        - in: cookie
+          name: refresh_token
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Токен успешно обновлен
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                    example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  /auth/logout:
+    post:
+      tags:
+        - Аутентификация
+      summary: Выход из аккаунта
+      description: Сбрасывает refresh_token в cookie браузера.
+      responses:
+        '200':
+          description: Успешный выход
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Успешный выход
+
+  /users/me:
+    get:
+      tags:
+        - Пользователи
+      summary: Профиль текущего авторизованного пользователя
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Данные профиля
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          description: Пользователь не найден
+
+  # ---------------------------------------------------------------------------
+  # ФИЛЬМЫ И ПОИСК
+  # ---------------------------------------------------------------------------
+  /movies/search:
+    get:
+      tags:
+        - Фильмы
+      summary: Полнотекстовый и нечеткий поиск фильмов
+      description: Ищет совпадения по названию и оригинальному названию через `pg_trgm`. Если результатов нет, отправляет задачу в очередь воркеров.
+      parameters:
+        - in: query
+          name: q
+          required: true
+          description: Поисковый запрос (название фильма)
+          schema:
+            type: string
+            example: Начало
+      responses:
+        '200':
+          description: Список найденных фильмов
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count:
+                    type: integer
+                    example: 1
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Movie'
+        '400':
+          description: Параметр запроса 'q' отсутствует
+
+  /movies/by-imdb/{imdb_id}:
+    get:
+      tags:
+        - Фильмы
+      summary: Получение или автоматический импорт фильма по IMDb ID
+      description: Если фильм уже есть в БД — возвращает его сразу. Если нет — запускает параллельные горутины (OMDb API для метаданных, скрапинг Кинопоиска для русского перевода/описания и Letterboxd для рейтинга), сохраняет в PostgreSQL и возвращает фильм.
+      parameters:
+        - in: path
+          name: imdb_id
+          required: true
+          description: Идентификатор IMDb (начинается с 'tt')
+          schema:
+            type: string
+            example: tt1375666
+      responses:
+        '200':
+          description: Фильм найден в локальной базе или успешно спарсен
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Movie'
+        '400':
+          description: Некорректный формат IMDb ID
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /movies/{slug}:
+    get:
+      tags:
+        - Фильмы
+      summary: Получение фильма по slug
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          description: URL-слаг фильма (например, inception-2010)
+          schema:
+            type: string
+            example: inception-2010
+      responses:
+        '200':
+          description: Данные фильма вместе со списком рецензий
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Movie'
+        '404':
+          description: Фильм не найден
+
+  # ---------------------------------------------------------------------------
+  # РЕЦЕНЗИИ И КОМПОЗИТНЫЕ ОЦЕНКИ
+  # ---------------------------------------------------------------------------
+  /movies/{id}/reviews:
+    post:
+      tags:
+        - Рецензии
+      summary: Создание или обновление композитной оценки фильма
+      description: Добавляет или обновляет оценку по 5 критериям (1-10) для авторизованного пользователя. Атомарно в транзакции пересчитывает средний балл фильма и счетчик рецензий.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          description: UUID фильма
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertReviewInput'
+      responses:
+        '200':
+          description: Рецензия успешно сохранена
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Review'
+        '400':
+          description: Ошибки валидации (оценки вне диапазона 1-10)
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  # ---------------------------------------------------------------------------
+  # РЕКОМЕНДАЦИИ
+  # ---------------------------------------------------------------------------
+  /recommendations/generate:
+    post:
+      tags:
+        - Рекомендации
+      summary: Генерация персональной подборки фильмов (ML / Граф вкусов)
+      description: Запрашивает подборку у Python ML сервиса. Ограничен Redis Rate Limiter (кулдаун 120 секунд).
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Подборка успешно сформирована
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Movie'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '429':
+          description: Слишком частые запросы (сработал Rate Limiter)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: Подождите перед следующей генерацией
+                  retry_after:
+                    type: integer
+                    example: 94
+
+# ---------------------------------------------------------------------------
+# СХЕМЫ ДАННЫХ И КОМПОНЕНТЫ
+# ---------------------------------------------------------------------------
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    UnauthorizedError:
+      description: Неавторизованный запрос или недействительный токен
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: Токен авторизации отсутствует или истек
+    InternalError:
+      description: Внутренняя ошибка сервера
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: Database error
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+          example: film_lover_99
+        email:
+          type: string
+          example: user@yandex.ru
+        avatar_url:
+          type: string
+          example: https://avatars.yandex.net/get-yapic/123/islands-200
+        auth_provider:
+          type: string
+          example: yandex
+        created_at:
+          type: string
+          format: date-time
+
+    ExternalRatings:
+      type: object
+      description: Внешние агрегированные рейтинги
+      properties:
+        imdb:
+          type: number
+          format: float
+          example: 8.8
+        kinopoisk:
+          type: number
+          format: float
+          example: 8.7
+        letterboxd:
+          type: number
+          format: float
+          example: 4.2
+
+    Movie:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+          example: inception-2010
+        title:
+          type: string
+          description: Локализованное название (Кинопоиск)
+          example: Начало
+        original_title:
+          type: string
+          description: Оригинальное название (IMDb)
+          example: Inception
+        description:
+          type: string
+          description: Описание сюжета (Кинопоиск)
+          example: Кобб — талантливый вор, лучший из лучших в опасном искусстве извлечения...
+        release_year:
+          type: integer
+          example: 2010
+        poster_url:
+          type: string
+          example: https://m.media-amazon.com/images/M/MV5BMjAxMzY3NjcxNF5BMl5BanBnXkFtZTcwNTI5OTM0Mw@@._V1_SX300.jpg
+        imdb_id:
+          type: string
+          example: tt1375666
+        external_ratings:
+          $ref: '#/components/schemas/ExternalRatings'
+        avg_total_score:
+          type: number
+          format: float
+          example: 8.4
+        reviews_count:
+          type: integer
+          example: 12
+        created_at:
+          type: string
+          format: date-time
+        reviews:
+          type: array
+          items:
+            $ref: '#/components/schemas/Review'
+
+    Review:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        movie_id:
+          type: string
+          format: uuid
+        score_visual:
+          type: integer
+          minimum: 1
+          maximum: 10
+          example: 9
+        score_audio:
+          type: integer
+          minimum: 1
+          maximum: 10
+          example: 9
+        score_story:
+          type: integer
+          minimum: 1
+          maximum: 10
+          example: 8
+        score_acting:
+          type: integer
+          minimum: 1
+          maximum: 10
+          example: 8
+        score_emotion:
+          type: integer
+          minimum: 1
+          maximum: 10
+          example: 9
+        total_score:
+          type: number
+          format: float
+          example: 8.6
+        review_text:
+          type: string
+          example: Сцена в невесомости снята потрясающе.
+        created_at:
+          type: string
+          format: date-time
+
+    UpsertReviewInput:
+      type: object
+      required:
+        - score_visual
+        - score_audio
+        - score_story
+        - score_acting
+        - score_emotion
+      properties:
+        score_visual:
+          type: integer
+          minimum: 1
+          maximum: 10
+          example: 9
+        score_audio:
+          type: integer
+          minimum: 1
+          maximum: 10
+          example: 9
+        score_story:
+          type: integer
+          minimum: 1
+          maximum: 10
+          example: 8
+        score_acting:
+          type: integer
+          minimum: 1
+          maximum: 10
+          example: 8
+        score_emotion:
+          type: integer
+          minimum: 1
+          maximum: 10
+          example: 9
+        review_text:
+          type: string
+          example: Сцена в невесомости снята потрясающе.
