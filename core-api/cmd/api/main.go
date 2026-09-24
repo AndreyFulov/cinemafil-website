@@ -15,6 +15,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/gofiber/swagger"
 )
 
 func main() {
@@ -46,6 +47,12 @@ func main() {
 		AllowOrigins:     "http://localhost:3000",
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
 		AllowCredentials: true,
+	}))
+
+	app.Static("/openapi.yaml", "./openapi.yaml")
+
+	app.Get("/swagger/*", swagger.New(swagger.Config{
+		URL: "/openapi.yaml",
 	}))
 
 	api := app.Group("/api/v1")
