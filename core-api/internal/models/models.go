@@ -12,20 +12,28 @@ type User struct {
 	ID           uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
 	Username     string    `gorm:"uniqueIndex;not null" json:"username"`
 	Email        string    `gorm:"uniqueIndex;not null" json:"email"`
-	PasswordHash string    `gorm:"not null" json:"-"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	Reviews      []Review  `gorm:"foreignKey:UserID" json:"reviews,omitempty"`
+	PasswordHash *string   `gorm:"type:varchar(255)" json:"-"` // Nullable для пользователей OAuth
+	AvatarURL    string    `json:"avatar_url"`
+
+	// Поля для OAuth
+	AuthProvider string `gorm:"type:varchar(50);default:'local'" json:"auth_provider"` // local, google, github, yandex, vk
+	ProviderID   string `gorm:"type:varchar(255);index" json:"provider_id,omitempty"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Reviews   []Review  `gorm:"foreignKey:UserID" json:"reviews,omitempty"`
 }
 
 type Movie struct {
 	ID              uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
 	Slug            string         `gorm:"uniqueIndex;not null" json:"slug"`
-	Title           string         `gorm:"index;not null" json:"title"`
-	OriginalTitle   string         `json:"original_title"`
+	Title           string         `gorm:"index;not null" json:"title"`  // Название с Кинопоиска
+	OriginalTitle   string         `json:"original_title"`               // Оригинальное с IMDb
+	Description     string         `gorm:"type:text" json:"description"` // Описание с Кинопоиска
 	ReleaseYear     int            `json:"release_year"`
 	PosterURL       string         `json:"poster_url"`
-	ExternalRatings datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"external_ratings"`
+	IMDbID          string         `gorm:"column:imdb_id;uniqueIndex;not null" json:"imdb_id"` // tt1375666
+	ExternalRatings datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"external_ratings"`    // {"imdb": 8.8, "kp": 8.7, "letterboxd": 4.3}
 	AvgTotalScore   float32        `gorm:"default:0" json:"avg_total_score"`
 	ReviewsCount    int            `gorm:"default:0" json:"reviews_count"`
 	CreatedAt       time.Time      `json:"created_at"`
